@@ -771,7 +771,7 @@ class Application:
         for code in available_languages():
             ttk.Radiobutton(lang_frame, text=code.upper(), variable=lang_var,
                           value=code, command=lambda: self._switch_lang_cb(lang_var.get())).pack(side='left', padx=5)
-        self._notebook.hide(0)
+
 
     def _switch_lang_cb(self, code: str) -> None:
         set_language(code)
@@ -842,6 +842,14 @@ class Application:
     def _create_network_tab(self) -> None:
         tab = ttk.Frame(self._notebook)
         self._notebook.add(tab, text=t("🌐 Сеть"))
+        frame = ttk.LabelFrame(tab, text=t("Доступность"), padding=10)
+        frame.pack(fill='both', expand=True, padx=10, pady=10)
+        btn_scan = ttk.Button(frame, text=t("Скан окружения"), command=self._open_cell_scan)
+        btn_scan.pack(pady=5, fill='x')
+        btn_band = ttk.Button(frame, text=t("Управление бендами LTE"), command=self._open_band_mgmt)
+        btn_band.pack(pady=5, fill='x')
+        btn_whitelist = ttk.Button(frame, text=t("🛡 Белые списки (РФ)"), command=self._open_whitelist)
+        btn_whitelist.pack(pady=5, fill='x')
 
     def _create_statusbar(self) -> None:
         self._statusbar = ttk.Label(self._root, text=t("Нет данных"), relief='sunken', anchor='w')
@@ -897,6 +905,10 @@ class Application:
         iface = self._entry_vars['iface'].get()
         self._cell_scan_window = CellScanWindow(self._root, self._api, iface)
         self._cell_scan_window.grab_set()
+
+    def _open_whitelist(self) -> None:
+        w = WhitelistWindow(self._root)
+        self._root.wait_window(w)
 
     def _toggle_connect(self) -> None:
         if self._api.is_connected:
@@ -1414,6 +1426,20 @@ def main() -> None:
         logging.getLogger().setLevel(logging.DEBUG)
     app = Application()
     app.run()
+
+
+class WhitelistWindow(tk.Toplevel):
+    def __init__(self, parent: tk.Tk) -> None:
+        super().__init__(parent)
+        self.title(t("🛡 Белые списки (РФ)"))
+        self.resizable(False, False)
+        f = ttk.Frame(self, padding=10)
+        f.pack()
+        ttk.Label(f, text=t("Проверка доступности хостов")).pack(pady=5)
+        hosts = ["gov.ru", "kremlin.ru", "mvd.ru", "nalog.ru", "gosuslugi.ru", "cbr.ru"]
+        for h in hosts:
+            ttk.Label(f, text=f"  {h}").pack(anchor='w')
+        ttk.Button(f, text=t("Закрыть"), command=self.destroy).pack(pady=10)
 
 
 if __name__ == '__main__':
