@@ -665,6 +665,7 @@ class Application:
         self._monitor_interval = MONITOR_INTERVAL
         self._tick_counter = 0
         self._tray_icon: Any = None
+        self._after_id: str | None = None
         self._always_on_top = False
         self._alert_enabled = False
         self._alert_threshold = -110
