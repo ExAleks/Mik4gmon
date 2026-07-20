@@ -589,7 +589,8 @@ class BandManagementWindow(tk.Toplevel):
             current = self._get_active_bands()
             self.after(0, self._populate_ui, current)
         except Exception as e:
-            self.after(0, lambda: self._info_lbl.configure(text=f"Error: {e}"))
+            err_msg = str(e)
+            self.after(0, lambda em=err_msg: self._info_lbl.configure(text=f"Error: {em}"))
 
     def _get_active_bands(self) -> int:
         with _AT_LOCK:
@@ -949,7 +950,8 @@ class Application:
             self._iface_id = self._resolve_interface(iface)
             self._root.after(0, self._on_connected)
         except Exception as e:
-            self._root.after(0, lambda: self._on_connect_error(str(e)))
+            err_msg = str(e)
+            self._root.after(0, lambda em=err_msg: self._on_connect_error(em))
 
     def _resolve_interface(self, name: str) -> str:
         try:
