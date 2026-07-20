@@ -33,7 +33,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build with Buildozer
         run: |
-          buildozer android debug
+          buildozer android debug --accept-noninteractive
       - uses: actions/upload-artifact@v4
         with:
           name: Mik4gmon-android
