@@ -32,11 +32,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq git zip unzip openjdk-17-jdk python3-pip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev
+          pip3 install --upgrade Cython virtualenv
+          pip3 install --upgrade buildozer
       - name: Build with Buildozer
-        uses: ArtemSBulgakov/buildozer-action@v1
-        with:
-          workdir: .
-          buildozer_version: stable
+        run: |
+          buildozer android debug
       - uses: actions/upload-artifact@v4
         with:
           name: Mik4gmon-android
