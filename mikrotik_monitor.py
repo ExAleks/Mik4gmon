@@ -840,32 +840,6 @@ class Application:
     def _apply_theme(self) -> None:
         if self._dark_mode:
             self._apply_dark_theme()
-        else:
-            self._apply_system_theme()
-
-    def _apply_system_theme(self) -> None:
-        try:
-            import ctypes
-            COLOR_WINDOW = 5
-            COLOR_BTNFACE = 15
-            COLOR_WINDOWTEXT = 8
-            c = ctypes.windll.user32.GetSysColor
-            bg = f'#{c(COLOR_WINDOW) & 0xFF:02x}{(c(COLOR_WINDOW) >> 8) & 0xFF:02x}{(c(COLOR_WINDOW) >> 16) & 0xFF:02x}'
-            fg = f'#{c(COLOR_WINDOWTEXT) & 0xFF:02x}{(c(COLOR_WINDOWTEXT) >> 8) & 0xFF:02x}{(c(COLOR_WINDOWTEXT) >> 16) & 0xFF:02x}'
-            btn = f'#{c(COLOR_BTNFACE) & 0xFF:02x}{(c(COLOR_BTNFACE) >> 8) & 0xFF:02x}{(c(COLOR_BTNFACE) >> 16) & 0xFF:02x}'
-            self._root.configure(bg=bg)
-            self._style.configure('TLabel', background=bg, foreground=fg)
-            self._style.configure('TFrame', background=bg)
-            self._style.configure('TLabelFrame', background=bg, foreground=fg)
-            self._style.configure('TButton', background=btn, foreground=fg)
-            self._style.configure('TLabelframe.Label', background=bg, foreground=fg)
-            self._style.configure('Treeview', background=bg, foreground=fg, fieldbackground=bg)
-            if self._speed_graph:
-                self._speed_graph.set_bg_color(bg)
-                self._speed_graph.set_text_color(fg)
-                self._speed_graph.set_grid_color('#c0c0c0')
-        except Exception:
-            pass
 
     def _apply_dark_theme(self) -> None:
         bg = "#1e1e2e"
