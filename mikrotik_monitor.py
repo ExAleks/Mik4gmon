@@ -946,9 +946,9 @@ class Application:
         try:
             self._api.connect()
             self._iface_id = self._resolve_interface(iface)
-            self.after(0, self._on_connected)
+            self._root.after(0, self._on_connected)
         except Exception as e:
-            self.after(0, self._on_connect_error, str(e))
+            self._root.after(0, lambda: self._on_connect_error(str(e)))
 
     def _resolve_interface(self, name: str) -> str:
         try:
@@ -987,7 +987,7 @@ class Application:
                 self._collect_data()
             except ConnectionError:
                 self._monitor_running = False
-                self.after(0, self._on_disconnect)
+                self._root.after(0, self._on_disconnect)
                 break
             except Exception:
                 logger.exception("Monitor loop error")
@@ -998,7 +998,7 @@ class Application:
                     self._api.cmd('/system/identity/print')
                 except ConnectionError:
                     self._monitor_running = False
-                    self.after(0, self._on_disconnect)
+                    self._root.after(0, self._on_disconnect)
                     break
 
     def _collect_data(self) -> None:
@@ -1382,7 +1382,7 @@ class Application:
                     data = json.loads(resp.read().decode())
                     latest = data.get('tag_name', '')
                     if latest and latest.lstrip('v') > VERSION:
-                        self.after(0, lambda: self._statusbar.configure(
+                        self._root.after(0, lambda: self._statusbar.configure(
                             text=f"Update {latest} available: {GITHUB_REPO}/releases"))
             except Exception:
                 pass
