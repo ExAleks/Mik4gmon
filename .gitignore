@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 *.log
 *.spec
+!buildozer.spec
 build/
 dist/
 *.egg-info/
