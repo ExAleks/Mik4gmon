@@ -651,6 +651,7 @@ class Application:
         self._root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._setup_style()
         self._load_icon()
+        self._dark_mode = False
         self._apply_theme()
         self._center_window(1200, 780)
 
@@ -664,7 +665,6 @@ class Application:
         self._monitor_interval = MONITOR_INTERVAL
         self._tick_counter = 0
         self._tray_icon: Any = None
-        self._dark_mode = False
         self._always_on_top = False
         self._alert_enabled = False
         self._alert_threshold = -110
