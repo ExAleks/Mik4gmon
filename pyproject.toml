@@ -1,0 +1,6 @@
+[project]
+name = "mik4gmon"
+version = "0.0.1"
+description = "MikroTik LTE monitor for Fibocom L850-GL"
+requires-python = ">=3.9"
+dependencies = []
