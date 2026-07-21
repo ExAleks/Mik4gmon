@@ -713,6 +713,7 @@ class Application:
         self._root.geometry(f"{w}x{h}+{x}+{y}")
 
     def _init_ui(self) -> None:
+        self._create_menu()
         self._notebook = ttk.Notebook(self._root)
         self._notebook.pack(fill='both', expand=True, padx=5, pady=5)
 
@@ -720,14 +721,44 @@ class Application:
         self._create_monitor_tab()
         self._create_tower_tab()
         self._create_speed_tab()
-        self._create_network_tab()
         self._create_statusbar()
+
+    def _create_menu(self) -> None:
+        menubar = tk.Menu(self._root)
+        self._root.configure(menu=menubar)
+        file_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label=t("📊 Состояние"), menu=file_menu)
+        file_menu.add_command(label=t("Обновить данные"), command=self._force_refresh)
+        file_menu.add_separator()
+        file_menu.add_command(label=t("Перезагрузить роутер"), command=self._reboot_router)
+        file_menu.add_separator()
+        file_menu.add_command(label=t("Очистить пики"), command=self._clear_peaks)
+
+        settings_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label=t("⚙️"), menu=settings_menu)
+        settings_menu.add_command(label=t("⚠ Алерт при слабом сигнале"), command=self._open_alerts)
+        settings_menu.add_command(label=t("Управление бендами LTE"), command=self._open_band_mgmt)
+        settings_menu.add_separator()
+        settings_menu.add_command(label=t("Скан окружения"), command=self._open_cell_scan)
+        settings_menu.add_separator()
+        settings_menu.add_command(label=t("🛡 Белые списки (РФ)"), command=self._open_whitelist)
+        settings_menu.add_separator()
+        self._ontop_var = tk.BooleanVar(value=False)
+        settings_menu.add_checkbutton(label=t("Поверх окон"), variable=self._ontop_var, command=self._toggle_ontop)
+        self._dark_var = tk.BooleanVar(value=False)
+        settings_menu.add_checkbutton(label=t("🌙"), variable=self._dark_var, command=self._toggle_dark)
+
+        lang_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="🌐", menu=lang_menu)
+        self._lang_var = tk.StringVar(value="ru")
+        for code in available_languages():
+            lang_menu.add_radiobutton(label=code.upper(), variable=self._lang_var, value=code, command=self._switch_lang)
 
     def _create_connection_tab(self) -> None:
         tab = ttk.Frame(self._notebook)
         self._notebook.add(tab, text=t("⚙️ Подключение"))
-        frame = ttk.LabelFrame(tab, text=t("Параметры"), padding=10)
-        frame.pack(fill='both', expand=True, padx=10, pady=10)
+        frame = ttk.LabelFrame(tab, text=t("Параметры подключения"), padding=15)
+        frame.pack(fill='both', expand=True, padx=15, pady=15)
         fields = [
             (t("IP роутера:"), "host", "192.168.88.1"),
             (t("Пароль:"), "password", DEFAULT_PASSWORD),
@@ -737,51 +768,26 @@ class Application:
         ]
         self._entry_vars: dict[str, tk.StringVar] = {}
         for i, (label, key, default) in enumerate(fields):
-            ttk.Label(frame, text=label).grid(row=i, column=0, sticky='w', pady=3)
+            ttk.Label(frame, text=label).grid(row=i, column=0, sticky='w', pady=2)
             var = tk.StringVar(value=default)
             self._entry_vars[key] = var
-            kw = {"textvariable": var, "width": 22}
+            kw = {"textvariable": var, "width": 20}
             if key == "password":
                 kw["show"] = "*"
-            ttk.Entry(frame, **kw).grid(row=i, column=1, sticky='ew', pady=3, padx=5)
+            ttk.Entry(frame, **kw).grid(row=i, column=1, sticky='ew', pady=2, padx=5)
         frame.columnconfigure(1, weight=1)
         btn_frame = ttk.Frame(frame)
-        btn_frame.grid(row=len(fields), column=0, columnspan=2, pady=10)
+        btn_frame.grid(row=len(fields), column=0, columnspan=2, pady=8)
         self._connect_btn = ttk.Button(btn_frame, text=t("🚀 Подключиться"), command=self._toggle_connect)
         self._connect_btn.pack(side='left', padx=5)
         self._conn_status = ttk.Label(btn_frame, text=t("Отключено"), foreground="gray")
         self._conn_status.pack(side='left', padx=5)
-        ttk.Button(frame, text=t("⚠ Алерт при слабом сигнале"), command=self._open_alerts).grid(
-            row=len(fields) + 1, column=0, columnspan=2, pady=5, sticky='ew')
-        ttk.Button(frame, text=t("Управление бендами LTE"), command=self._open_band_mgmt).grid(
-            row=len(fields) + 2, column=0, columnspan=2, pady=5, sticky='ew')
-        ttk.Button(frame, text=t("Перезагрузить роутер"), command=self._reboot_router).grid(
-            row=len(fields) + 3, column=0, columnspan=2, pady=5, sticky='ew')
-        ontop_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(frame, text=t("Поверх окон"), variable=ontop_var,
-                       command=lambda: self._root.attributes('-topmost', ontop_var.get())).grid(
-            row=len(fields) + 4, column=0, pady=5, sticky='w')
-        self._dark_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(frame, text=t("🌙 Тёмная тема"), variable=self._dark_var,
-                       command=self._toggle_dark).grid(
-            row=len(fields) + 4, column=1, pady=5, sticky='w')
-        lang_var = tk.StringVar(value="ru")
-        lang_frame = ttk.Frame(frame)
-        lang_frame.grid(row=len(fields) + 5, column=0, columnspan=2, pady=5, sticky='ew')
-        for code in available_languages():
-            ttk.Radiobutton(lang_frame, text=code.upper(), variable=lang_var,
-                          value=code, command=lambda: self._switch_lang_cb(lang_var.get())).pack(side='left', padx=5)
-
-
-    def _switch_lang_cb(self, code: str) -> None:
-        set_language(code)
-        messagebox.showinfo("Info", "Restart required for language change")
 
     def _create_monitor_tab(self) -> None:
         tab = ttk.Frame(self._notebook)
         self._notebook.add(tab, text=t("📈 Монитор"))
-        self._signal_frame = ttk.LabelFrame(tab, text=t("Параметры сигнала"), padding=10)
-        self._signal_frame.pack(fill='both', expand=True, padx=10, pady=10)
+        self._signal_frame = ttk.LabelFrame(tab, text=t("Параметры сигнала"), padding=15)
+        self._signal_frame.pack(fill='both', expand=True, padx=15, pady=15)
         labels = [
             ("rsrp", "RSRP", "-"),
             ("sinr", "SINR", "-"),
@@ -792,10 +798,11 @@ class Application:
             ("cell_id", "Cell ID", "-"),
             ("rat", t("Тип сети (RAT)"), "-"),
             ("aggr", t("Агрегация (CA)"), "-"),
+            ("uptime", t("Время работы"), "-"),
         ]
         self._signal_labels: dict[str, ttk.Label] = {}
         for i, (key, display, _) in enumerate(labels):
-            ttk.Label(self._signal_frame, text=f"{display}:").grid(row=i, column=0, sticky='w', pady=2)
+            ttk.Label(self._signal_frame, text=f"{display}:").grid(row=i, column=0, sticky='w', pady=1)
             lbl = ttk.Label(self._signal_frame, text="-", font=('Segoe UI', 9, 'bold'))
             lbl.grid(row=i, column=1, sticky='w', padx=5)
             self._signal_labels[key] = lbl
@@ -818,10 +825,6 @@ class Application:
         scroll = ttk.Scrollbar(frame, orient='vertical', command=self._tower_tree.yview)
         scroll.pack(side='right', fill='y')
         self._tower_tree.configure(yscrollcommand=scroll.set)
-        btn_frame = ttk.Frame(tab)
-        btn_frame.pack(fill='x', padx=10, pady=5)
-        ttk.Button(btn_frame, text=t("Скан окружения"), command=self._open_cell_scan).pack(side='left', padx=5)
-        ttk.Button(btn_frame, text=t("Очистить"), command=self._clear_tower).pack(side='left', padx=5)
 
     def _create_speed_tab(self) -> None:
         tab = ttk.Frame(self._notebook)
@@ -831,25 +834,13 @@ class Application:
         self._speed_graph = SpeedGraph(frame, width=600, height=250)
         self._speed_graph.pack(fill='both', expand=True)
         info_frame = ttk.Frame(tab)
-        info_frame.pack(fill='x', padx=10, pady=5)
+        info_frame.pack(fill='x', padx=15, pady=5)
         self._peak_rx_lbl = ttk.Label(info_frame, text=f"{t('Download')} ↓: -", font=('Segoe UI', 9, 'bold'))
         self._peak_rx_lbl.pack(side='left', padx=10)
         self._peak_tx_lbl = ttk.Label(info_frame, text=f"{t('Upload')} ↑: -", font=('Segoe UI', 9, 'bold'))
         self._peak_tx_lbl.pack(side='left', padx=10)
         ttk.Button(info_frame, text=t("Очистить пики"), command=self._clear_peaks).pack(side='right', padx=5)
         ttk.Button(info_frame, text=t("Обновить данные"), command=self._force_refresh).pack(side='right', padx=5)
-
-    def _create_network_tab(self) -> None:
-        tab = ttk.Frame(self._notebook)
-        self._notebook.add(tab, text=t("🌐 Сеть"))
-        frame = ttk.LabelFrame(tab, text=t("Доступность"), padding=10)
-        frame.pack(fill='both', expand=True, padx=10, pady=10)
-        btn_scan = ttk.Button(frame, text=t("Скан окружения"), command=self._open_cell_scan)
-        btn_scan.pack(pady=5, fill='x')
-        btn_band = ttk.Button(frame, text=t("Управление бендами LTE"), command=self._open_band_mgmt)
-        btn_band.pack(pady=5, fill='x')
-        btn_whitelist = ttk.Button(frame, text=t("🛡 Белые списки (РФ)"), command=self._open_whitelist)
-        btn_whitelist.pack(pady=5, fill='x')
 
     def _create_statusbar(self) -> None:
         self._statusbar = ttk.Label(self._root, text=t("Нет данных"), relief='sunken', anchor='w')
@@ -1094,7 +1085,7 @@ class Application:
         except ValueError:
             free_mb = 0
             total_mb = 0
-        self._signal_labels.get('uptime', ttk.Label()).configure(text=f"{uptime}")
+        self._signal_labels['uptime'].configure(text=f"{uptime}")
         self._statusbar.configure(
             text=f"CPU: {cpu}% | {t('Свободная память')}: {free_mb:.0f}/{total_mb:.0f} MB"
         )
