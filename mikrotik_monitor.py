@@ -862,22 +862,7 @@ class Application:
             font=("Segoe UI", 10, "bold"))
         self.jitter_label.pack(side=tk.LEFT)
 
-        # Управление графиком
-        self.ctrl_frame = ttk.Frame(self.tab_monitor)
-        self.ctrl_frame.pack(fill=tk.X, padx=10, pady=5)
-        ttk.Label(self.ctrl_frame, text=t("График:")).pack(side=tk.LEFT)
-        self.graph_param = tk.StringVar(value='rsrp')
-        self.graph_cb = ttk.Combobox(
-            self.ctrl_frame, textvariable=self.graph_param,
-            values=params, state='readonly', width=8)
-        self.graph_cb.pack(side=tk.LEFT, padx=5)
-        ttk.Button(self.ctrl_frame, text=t("Сбросить пики"),
-                   command=self.reset_peaks).pack(side=tk.RIGHT, padx=5)
-
-        # График
-        self.signal_graph = CanvasGraph(
-            self.tab_monitor, history=100, height=180)
-        self.signal_graph.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        # Управление графиком — на вкладке "Состояние"
 
     # =====================================================
     # ВКЛАДКА 🎛️ СЕТЬ
@@ -1154,9 +1139,9 @@ class Application:
         self._style.configure('TLabelframe.Label', background=bg, foreground=fg)
         self._style.configure('Treeview', background=bg, foreground=fg, fieldbackground=bg)
         self._style.map('Treeview', background=[('selected', sel)])
-        if hasattr(self, 'signal_graph') and self.signal_graph:
-            self.signal_graph.configure(bg=bg)
-            self.signal_graph.configure(highlightbackground=sel)
+        if hasattr(self, '_speed_graph') and self._speed_graph:
+            self._speed_graph.configure(bg=bg)
+            self._speed_graph.configure(highlightbackground=sel)
 
     def _toggle_dark(self) -> None:
         self._dark_mode = not self._dark_mode
@@ -1517,8 +1502,8 @@ class Application:
             return
         rx, tx, ts = self._stat.last_n(60)
         if rx:
-            self.signal_graph.values = [v * 10 for v in rx]
-            self.signal_graph._redraw()
+            self._speed_graph.values = [v * 10 for v in rx]
+            self._speed_graph._redraw()
         prx = self._stat.peak_rx
         ptx = self._stat.peak_tx
         self._peak_rx_lbl.config(
