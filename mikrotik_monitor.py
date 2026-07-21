@@ -688,8 +688,8 @@ class Application:
         self._signal_data: dict[str, Any] = {}
         self._prev_cell_id = ""
         self._cell_scan_window: CellScanWindow | None = None
-        self._speed_graph = None
-        self._init_ui()
+        self._reconnecting = False
+        self._setup_ui()
 
     def _load_icon(self) -> None:
         icon_path = Path("icon.ico")
@@ -703,7 +703,8 @@ class Application:
 
     def _setup_style(self) -> None:
         self._style = ttk.Style()
-        self._style.theme_use('clam')
+        with contextlib.suppress(tk.TclError):
+            self._style.theme_use('clam')
 
     def _center_window(self, w: int, h: int) -> None:
         sw = self._root.winfo_screenwidth()
@@ -712,139 +713,430 @@ class Application:
         y = (sh - h) // 2
         self._root.geometry(f"{w}x{h}+{x}+{y}")
 
-    def _init_ui(self) -> None:
-        self._create_menu()
-        self._notebook = ttk.Notebook(self._root)
-        self._notebook.pack(fill='both', expand=True, padx=5, pady=5)
+    # =====================================================
+    # UI BUILD — точная копия Hua4GMon-main/main.py
+    # =====================================================
 
-        self._create_connection_tab()
-        self._create_monitor_tab()
-        self._create_tower_tab()
-        self._create_speed_tab()
-        self._create_statusbar()
+    def _setup_ui(self) -> None:
+        # Верхняя строка статуса
+        self.top_bar = ttk.Frame(self._root)
+        self.top_bar.pack(fill=tk.X, padx=5, pady=2)
+        self.status_label = ttk.Label(
+            self.top_bar, text=t("Отключено"), foreground='red',
+            font=("Segoe UI", 10, "bold"))
+        self.status_label.pack(side=tk.LEFT, padx=5)
 
-    def _create_menu(self) -> None:
-        menubar = tk.Menu(self._root)
-        self._root.configure(menu=menubar)
-        file_menu = tk.Menu(menubar, tearoff=0)
-        menubar.add_cascade(label=t("📊 Состояние"), menu=file_menu)
-        file_menu.add_command(label=t("Обновить данные"), command=self._force_refresh)
-        file_menu.add_separator()
-        file_menu.add_command(label=t("Перезагрузить роутер"), command=self._reboot_router)
-        file_menu.add_separator()
-        file_menu.add_command(label=t("Очистить пики"), command=self._clear_peaks)
+        # Переключатель языка (справа)
+        self._lang_code_by_name: dict[str, str] = {}
+        self.lang_var = tk.StringVar(value="Русский")
+        lang_cb = ttk.Combobox(
+            self.top_bar, textvariable=self.lang_var,
+            values=["Русский", "English"],
+            state='readonly', width=10)
+        lang_cb.pack(side=tk.RIGHT, padx=5)
+        lang_cb.bind("<<ComboboxSelected>>", self._on_language_change)
+        ttk.Label(self.top_bar, text=t("Язык:")).pack(side=tk.RIGHT)
 
-        settings_menu = tk.Menu(menubar, tearoff=0)
-        menubar.add_cascade(label=t("⚙️"), menu=settings_menu)
-        settings_menu.add_command(label=t("⚠ Алерт при слабом сигнале"), command=self._open_alerts)
-        settings_menu.add_command(label=t("Управление бендами LTE"), command=self._open_band_mgmt)
-        settings_menu.add_separator()
-        settings_menu.add_command(label=t("Скан окружения"), command=self._open_cell_scan)
-        settings_menu.add_separator()
-        settings_menu.add_command(label=t("🛡 Белые списки (РФ)"), command=self._open_whitelist)
-        settings_menu.add_separator()
-        self._ontop_var = tk.BooleanVar(value=False)
-        settings_menu.add_checkbutton(label=t("Поверх окон"), variable=self._ontop_var, command=self._toggle_ontop)
-        self._dark_var = tk.BooleanVar(value=False)
-        settings_menu.add_checkbutton(label=t("🌙"), variable=self._dark_var, command=self._toggle_dark)
+        self.ontop_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(self.top_bar, text=t("Поверх окон"),
+                        variable=self.ontop_var,
+                        command=self.toggle_on_top).pack(side=tk.RIGHT, padx=5)
 
-        lang_menu = tk.Menu(menubar, tearoff=0)
-        menubar.add_cascade(label="🌐", menu=lang_menu)
-        self._lang_var = tk.StringVar(value="ru")
-        for code in available_languages():
-            lang_menu.add_radiobutton(label=code.upper(), variable=self._lang_var, value=code, command=self._switch_lang)
+        # Вкладки
+        self.notebook = ttk.Notebook(self._root)
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        self.tab_settings = ttk.Frame(self.notebook)
+        self.tab_monitor = ttk.Frame(self.notebook)
+        self.tab_network = ttk.Frame(self.notebook)
+        self.tab_tower = ttk.Frame(self.notebook)
+        self.tab_status = ttk.Frame(self.notebook)
+        self.tab_whitelist = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_settings, text=t("⚙️ Подключение"))
+        self.notebook.add(self.tab_monitor, text=t("📈 Монитор"))
+        self.notebook.add(self.tab_network, text=t("🎛️ Сеть"))
+        self.notebook.add(self.tab_tower, text=t("🗼 Вышка"))
+        self.notebook.add(self.tab_status, text=t("📊 Состояние"))
+        self.notebook.add(self.tab_whitelist, text=t("🛡 Белые списки (РФ)"))
 
-    def _create_connection_tab(self) -> None:
-        tab = ttk.Frame(self._notebook)
-        self._notebook.add(tab, text=t("⚙️ Подключение"))
-        frame = ttk.LabelFrame(tab, text=t("Параметры подключения"), padding=15)
-        frame.pack(fill='both', expand=True, padx=15, pady=15)
+        self.build_settings_tab()
+        self.build_monitor_tab()
+        self.build_network_tab()
+        self.build_tower_tab()
+        self.build_status_tab()
+        self.build_whitelist_tab()
+
+    def _on_language_change(self, _event=None) -> None:
+        code = self._lang_code_by_name.get(self.lang_var.get())
+        if code and code != current_language():
+            set_language(code)
+            mb.showinfo("Info", t("Перезапустите приложение для смены языка"))
+
+    # =====================================================
+    # ВКЛАДКА ⚙️ ПОДКЛЮЧЕНИЕ
+    # =====================================================
+
+    def build_settings_tab(self) -> None:
+        frame = ttk.LabelFrame(self.tab_settings,
+                               text=t("Параметры роутера"), padding=10)
+        frame.pack(fill=tk.X, padx=10, pady=10)
+
         fields = [
-            (t("IP роутера:"), "host", "192.168.88.1"),
+            (t("IP адрес:"), "host", "192.168.88.1"),
             (t("Пароль:"), "password", DEFAULT_PASSWORD),
             (t("LTE интерфейс:"), "iface", "LTE1"),
             (t("Порт API:"), "port", str(API_PORT_DEFAULT)),
-            (t("Интервал обновления (с):"), "interval", str(MONITOR_INTERVAL)),
         ]
         self._entry_vars: dict[str, tk.StringVar] = {}
         for i, (label, key, default) in enumerate(fields):
-            ttk.Label(frame, text=label).grid(row=i, column=0, sticky='w', pady=2)
+            ttk.Label(frame, text=label).grid(
+                row=i, column=0, sticky='e', padx=5, pady=5)
             var = tk.StringVar(value=default)
             self._entry_vars[key] = var
-            kw = {"textvariable": var, "width": 20}
+            kw = {"textvariable": var, "width": 25}
             if key == "password":
                 kw["show"] = "*"
-            ttk.Entry(frame, **kw).grid(row=i, column=1, sticky='ew', pady=2, padx=5)
-        frame.columnconfigure(1, weight=1)
-        btn_frame = ttk.Frame(frame)
-        btn_frame.grid(row=len(fields), column=0, columnspan=2, pady=8)
-        self._connect_btn = ttk.Button(btn_frame, text=t("🚀 Подключиться"), command=self._toggle_connect)
-        self._connect_btn.pack(side='left', padx=5)
-        self._conn_status = ttk.Label(btn_frame, text=t("Отключено"), foreground="gray")
-        self._conn_status.pack(side='left', padx=5)
+            ttk.Entry(frame, **kw).grid(row=i, column=1, sticky='w', padx=5)
 
-    def _create_monitor_tab(self) -> None:
-        tab = ttk.Frame(self._notebook)
-        self._notebook.add(tab, text=t("📈 Монитор"))
-        self._signal_frame = ttk.LabelFrame(tab, text=t("Параметры сигнала"), padding=15)
-        self._signal_frame.pack(fill='both', expand=True, padx=15, pady=15)
-        labels = [
-            ("rsrp", "RSRP", "-"),
-            ("sinr", "SINR", "-"),
-            ("rsrq", "RSRQ", "-"),
-            ("rssi", "RSSI", "-"),
-            ("band", t("Рабочий Band (LTE)"), "-"),
-            ("operator", t("Оператор (PLMN)"), "-"),
-            ("cell_id", "Cell ID", "-"),
-            ("rat", t("Тип сети (RAT)"), "-"),
-            ("aggr", t("Агрегация (CA)"), "-"),
-            ("uptime", t("Время работы"), "-"),
+        ttk.Label(frame, text=t("Опрос (сек):")).grid(
+            row=4, column=0, sticky='e', padx=5, pady=5)
+        self.update_interval = tk.StringVar(value=str(MONITOR_INTERVAL))
+        ttk.Combobox(frame, textvariable=self.update_interval,
+                     values=['0.5', '1', '2', '5'],
+                     state='readonly', width=5).grid(
+            row=4, column=1, sticky='w', padx=5)
+
+        self.reconnect_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(frame, text=t("Авто-переподключение при обрыве"),
+                        variable=self.reconnect_var).grid(
+            row=5, column=0, columnspan=2, sticky='w', padx=5, pady=5)
+
+        btn_frame = ttk.Frame(self.tab_settings)
+        btn_frame.pack(fill=tk.X, padx=10, pady=5)
+        self._connect_btn = ttk.Button(
+            btn_frame, text=t("🚀 Подключиться"), command=self.start_connect)
+        self._connect_btn.pack(side=tk.LEFT, padx=5)
+        self._conn_status = ttk.Label(btn_frame, text=t("Отключено"),
+                                      foreground="gray")
+        self._conn_status.pack(side=tk.LEFT, padx=5)
+
+    # =====================================================
+    # ВКЛАДКА 📈 МОНИТОР
+    # =====================================================
+
+    def build_monitor_tab(self) -> None:
+        # Здоровье связи
+        self.health_frame = ttk.LabelFrame(
+            self.tab_monitor, text=t("Общее качество связи"), padding=10)
+        self.health_frame.pack(fill=tk.X, padx=10, pady=5)
+        self.health_progress = ttk.Progressbar(
+            self.health_frame, orient="horizontal", mode="determinate")
+        self.health_progress.pack(fill=tk.X, side=tk.TOP, pady=5)
+        self.health_text_lbl = tk.Label(
+            self.health_frame, text=t("Подключитесь к роутеру"),
+            font=("Segoe UI", 12, "bold"), fg="gray")
+        self.health_text_lbl.pack(side=tk.TOP, pady=2)
+
+        # 4 крупных индикатора
+        self.digits_frame = ttk.Frame(self.tab_monitor)
+        self.digits_frame.pack(fill=tk.X, padx=10, pady=5)
+        self.lbl_vars: dict[str, dict[str, Any]] = {}
+        params = ['rsrp', 'sinr', 'rsrq', 'rssi']
+        names = ['RSRP', 'SINR', 'RSRQ', 'RSSI']
+        for i, (param, name) in enumerate(zip(params, names)):
+            f = ttk.LabelFrame(self.digits_frame, text=name, padding=5)
+            f.grid(row=0, column=i, padx=5, sticky='nsew')
+            self.digits_frame.columnconfigure(i, weight=1)
+            val = tk.Label(f, text="-",
+                           font=("Segoe UI", 20, "bold"), fg='gray')
+            val.pack()
+            status = tk.Label(f, text=t("Нет данных"),
+                              font=("Segoe UI", 9, "bold"), fg='gray')
+            status.pack(pady=2)
+            self.lbl_vars[param] = {'val': val, 'status': status}
+
+        # Инструменты
+        self.tools_frame = ttk.Frame(self.tab_monitor)
+        self.tools_frame.pack(fill=tk.X, padx=15, pady=5)
+        self.jitter_label = ttk.Label(
+            self.tools_frame, text=t("Джиттер: -"),
+            font=("Segoe UI", 10, "bold"))
+        self.jitter_label.pack(side=tk.LEFT)
+
+        # Управление графиком
+        self.ctrl_frame = ttk.Frame(self.tab_monitor)
+        self.ctrl_frame.pack(fill=tk.X, padx=10, pady=5)
+        ttk.Label(self.ctrl_frame, text=t("График:")).pack(side=tk.LEFT)
+        self.graph_param = tk.StringVar(value='rsrp')
+        self.graph_cb = ttk.Combobox(
+            self.ctrl_frame, textvariable=self.graph_param,
+            values=params, state='readonly', width=8)
+        self.graph_cb.pack(side=tk.LEFT, padx=5)
+        ttk.Button(self.ctrl_frame, text=t("Сбросить пики"),
+                   command=self.reset_peaks).pack(side=tk.RIGHT, padx=5)
+
+        # График
+        self.signal_graph = CanvasGraph(
+            self.tab_monitor, history=100, height=180)
+        self.signal_graph.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+    # =====================================================
+    # ВКЛАДКА 🎛️ СЕТЬ
+    # =====================================================
+
+    def build_network_tab(self) -> None:
+        # Управление бендами
+        band_frame = ttk.LabelFrame(
+            self.tab_network, text=t("Фиксация частот (Band Lock)"),
+            padding=10)
+        band_frame.pack(fill=tk.X, padx=10, pady=10)
+        ttk.Label(band_frame, wraplength=800, justify='left', text=t(
+            "Выберите bands для фиксации. Применяйте после подключения.")).grid(
+            row=0, column=0, columnspan=3, sticky='w', pady=(0, 8))
+        self.band_checkboxes: dict[str, tk.BooleanVar] = {}
+        row, col = 1, 0
+        for band_name in [f"B{b}" for b in sorted(ALL_LTE_BANDS)]:
+            var = tk.BooleanVar(value=False)
+            ttk.Checkbutton(band_frame, text=band_name,
+                            variable=var).grid(
+                row=row, column=col, sticky='w', padx=10, pady=2)
+            self.band_checkboxes[band_name] = var
+            col += 1
+            if col > 2:
+                col = 0
+                row += 1
+        for c in range(3):
+            band_frame.columnconfigure(c, weight=1)
+        btn_frame = ttk.Frame(band_frame)
+        btn_frame.grid(row=row + 1, column=0, columnspan=3, pady=10)
+        ttk.Button(btn_frame, text=t("Применить Band Lock"),
+                   command=self._apply_bands).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text=t("Сбросить в AUTO"),
+                   command=self._reset_bands).pack(side=tk.LEFT, padx=5)
+
+        # Управление роутером
+        mgmt_frame = ttk.LabelFrame(self.tab_network,
+                                    text=t("Управление роутером"), padding=10)
+        mgmt_frame.pack(fill=tk.X, padx=10, pady=5)
+        ttk.Label(mgmt_frame, wraplength=820, justify='left', text=t(
+            "Перезагрузка роутера. После перезагрузки подключитесь заново."
+        )).pack(anchor='w', pady=(0, 6))
+        ttk.Button(mgmt_frame, text=t("🔄 Перезагрузить роутер"),
+                   command=self._reboot_router).pack(side=tk.LEFT, padx=5)
+
+    # =====================================================
+    # ВКЛАДКА 🗼 ВЫШКА
+    # =====================================================
+
+    def build_tower_tab(self) -> None:
+        info_frame = ttk.LabelFrame(
+            self.tab_tower, text=t("Информация о станции"), padding=10)
+        info_frame.pack(fill=tk.X, padx=10, pady=(10, 5))
+        self.tower_labels: dict[str, ttk.Label] = {}
+        fields = [
+            ('plmn', t('Оператор (PLMN)')),
+            ('band', t('Рабочий Band (LTE)')),
+            ('cell_id', 'Cell ID'),
+            ('aggr', t('Агрегация (CA)')),
+            ('rat', t('Тип сети (RAT)')),
+            ('band_config', t('Band Lock (настр.)')),
         ]
-        self._signal_labels: dict[str, ttk.Label] = {}
-        for i, (key, display, _) in enumerate(labels):
-            ttk.Label(self._signal_frame, text=f"{display}:").grid(row=i, column=0, sticky='w', pady=1)
-            lbl = ttk.Label(self._signal_frame, text="-", font=('Segoe UI', 9, 'bold'))
-            lbl.grid(row=i, column=1, sticky='w', padx=5)
-            self._signal_labels[key] = lbl
+        for i, (key, name) in enumerate(fields):
+            ttk.Label(info_frame, text=f"{name}:",
+                      font=("", 10, "bold")).grid(
+                row=i, column=0, sticky='e', pady=4, padx=5)
+            lbl = ttk.Label(info_frame, text="-", font=("", 10))
+            lbl.grid(row=i, column=1, sticky='w', pady=4, padx=5)
+            self.tower_labels[key] = lbl
 
-    def _create_tower_tab(self) -> None:
-        tab = ttk.Frame(self._notebook)
-        self._notebook.add(tab, text=t("🗼 Вышка"))
-        frame = ttk.Frame(tab)
-        frame.pack(fill='both', expand=True, padx=10, pady=10)
+        # SIM / Устройство
+        sim_frame = ttk.LabelFrame(
+            self.tab_tower, text=t("SIM / Устройство"), padding=10)
+        sim_frame.pack(fill=tk.X, padx=10, pady=5)
+        self.sim_labels: dict[str, ttk.Label] = {}
+        sim_fields = [
+            ('iccid', 'ICCID (SIM-карта)'),
+            ('model', t('Модель')),
+            ('firmware', t('Прошивка')),
+        ]
+        for i, (key, name) in enumerate(sim_fields):
+            ttk.Label(sim_frame, text=f"{t(name)}:",
+                      font=("", 10, "bold")).grid(
+                row=i, column=0, sticky='e', pady=3, padx=5)
+            lbl = ttk.Label(sim_frame, text="-",
+                            font=("Consolas", 10))
+            lbl.grid(row=i, column=1, sticky='w', pady=3, padx=5)
+            self.sim_labels[key] = lbl
+
+        # История вышек (список смен Cell ID)
+        hist_frame = ttk.LabelFrame(
+            self.tab_tower, text=t("История переключений"), padding=10)
+        hist_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         columns = ("time", "cell_id", "rsrp", "sinr", "band", "operator")
-        self._tower_tree = ttk.Treeview(frame, columns=columns, show='headings', height=15)
+        self._tower_tree = ttk.Treeview(hist_frame, columns=columns,
+                                        show='headings', height=8)
         headings = [
-            (t("Время"), 120), ("Cell ID", 90), ("RSRP", 70),
-            ("SINR", 70), ("Band", 60), (t("Оператор (PLMN)"), 100),
+            (t("Время"), 100), ("Cell ID", 80), ("RSRP", 60),
+            ("SINR", 60), ("Band", 50), (t("Провайдер"), 80),
         ]
         for col, (text, w) in zip(columns, headings):
             self._tower_tree.heading(col, text=text)
             self._tower_tree.column(col, width=w, anchor='center')
-        self._tower_tree.pack(fill='both', expand=True, side='left')
-        scroll = ttk.Scrollbar(frame, orient='vertical', command=self._tower_tree.yview)
-        scroll.pack(side='right', fill='y')
+        self._tower_tree.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
+        scroll = ttk.Scrollbar(hist_frame, orient='vertical',
+                               command=self._tower_tree.yview)
+        scroll.pack(side=tk.RIGHT, fill='y')
         self._tower_tree.configure(yscrollcommand=scroll.set)
 
-    def _create_speed_tab(self) -> None:
-        tab = ttk.Frame(self._notebook)
-        self._notebook.add(tab, text=t("📊 Скорость"))
-        frame = ttk.Frame(tab)
-        frame.pack(fill='both', expand=True, padx=10, pady=10)
-        self._speed_graph = SpeedGraph(frame, width=600, height=250)
-        self._speed_graph.pack(fill='both', expand=True)
-        info_frame = ttk.Frame(tab)
-        info_frame.pack(fill='x', padx=15, pady=5)
-        self._peak_rx_lbl = ttk.Label(info_frame, text=f"{t('Download')} ↓: -", font=('Segoe UI', 9, 'bold'))
-        self._peak_rx_lbl.pack(side='left', padx=10)
-        self._peak_tx_lbl = ttk.Label(info_frame, text=f"{t('Upload')} ↑: -", font=('Segoe UI', 9, 'bold'))
-        self._peak_tx_lbl.pack(side='left', padx=10)
-        ttk.Button(info_frame, text=t("Очистить пики"), command=self._clear_peaks).pack(side='right', padx=5)
-        ttk.Button(info_frame, text=t("Обновить данные"), command=self._force_refresh).pack(side='right', padx=5)
+    # =====================================================
+    # ВКЛАДКА 📊 СОСТОЯНИЕ
+    # =====================================================
 
-    def _create_statusbar(self) -> None:
-        self._statusbar = ttk.Label(self._root, text=t("Нет данных"), relief='sunken', anchor='w')
-        self._statusbar.pack(fill='x', side='bottom', padx=2, pady=2)
+    def build_status_tab(self) -> None:
+        # График скорости в этой вкладке
+        speed_frame = ttk.LabelFrame(
+            self.tab_status, text=t("Мониторинг трафика"), padding=10)
+        speed_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self._speed_graph = CanvasGraph(
+            speed_frame, history=100, height=180)
+        self._speed_graph.pack(fill=tk.BOTH, expand=True)
+
+        info_frame = ttk.Frame(speed_frame)
+        info_frame.pack(fill=tk.X, pady=5)
+        self._peak_rx_lbl = ttk.Label(
+            info_frame, text=f"{t('Download')} ↓: -",
+            font=("Segoe UI", 9, "bold"))
+        self._peak_rx_lbl.pack(side=tk.LEFT, padx=10)
+        self._peak_tx_lbl = ttk.Label(
+            info_frame, text=f"{t('Upload')} ↑: -",
+            font=("Segoe UI", 9, "bold"))
+        self._peak_tx_lbl.pack(side=tk.LEFT, padx=10)
+        ttk.Button(info_frame, text=t("Сбросить пики"),
+                   command=self.reset_peaks).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(info_frame, text=t("Обновить"),
+                   command=self._force_refresh).pack(side=tk.RIGHT, padx=5)
+
+        # Статус
+        self.stat_labels: dict[str, ttk.Label] = {}
+        stat_fields = [
+            ('uptime', t('Время сессии')),
+            ('cpu', 'CPU'),
+            ('memory', t('Память')),
+            ('dl_rate', t('Скорость (Download)')),
+            ('ul_rate', t('Скорость (Upload)')),
+            ('operator', t('Оператор')),
+            ('cell_id', 'Cell ID'),
+        ]
+        for i, (key, name) in enumerate(stat_fields):
+            ttk.Label(info_frame, text=f"{name}:",
+                      font=("", 10, "bold")).grid(
+                row=i, column=2, sticky='e', pady=4, padx=5)
+            lbl = ttk.Label(info_frame, text="-", font=("", 10))
+            lbl.grid(row=i, column=3, sticky='w', pady=4, padx=5)
+            self.stat_labels[key] = lbl
+
+    # =====================================================
+    # ВКЛАДКА 🛡 БЕЛЫЕ СПИСКИ (РФ)
+    # =====================================================
+
+    def build_whitelist_tab(self) -> None:
+        intro = ttk.LabelFrame(self.tab_whitelist,
+                               text=t("Перед проверкой"), padding=10)
+        intro.pack(fill=tk.X, padx=10, pady=10)
+        ttk.Label(intro, wraplength=820, justify='left', text=t(
+            "⚠ Ноутбук должен быть подключён к роутеру.\n"
+            "Проверка доступности хостов через API роутера."
+        )).pack(anchor='w')
+
+        ctrl = ttk.Frame(self.tab_whitelist)
+        ctrl.pack(fill=tk.X, padx=10, pady=5)
+        self.wl_button = ttk.Button(
+            ctrl, text=t("🔍 Проверить сейчас"),
+            command=self._start_whitelist_check)
+        self.wl_button.pack(side=tk.LEFT, padx=5)
+        self.wl_progress = ttk.Progressbar(
+            ctrl, orient="horizontal", mode="indeterminate", length=200)
+        self.wl_progress.pack(side=tk.LEFT, padx=10)
+
+        verdict_frame = ttk.LabelFrame(
+            self.tab_whitelist, text=t("Вердикт"), padding=12)
+        verdict_frame.pack(fill=tk.X, padx=10, pady=5)
+        self.wl_title = tk.Label(verdict_frame, text=t("Не проверялось"),
+                                  font=("Segoe UI", 14, "bold"), fg='gray')
+        self.wl_title.pack(anchor='w')
+        self.wl_detail = tk.Label(verdict_frame, text="—",
+                                   font=("Segoe UI", 10),
+                                   fg='gray', wraplength=820, justify='left')
+        self.wl_detail.pack(anchor='w', pady=(4, 0))
+
+        whitelist_hosts = [
+            "gov.ru:80", "kremlin.ru:80", "mvd.ru:80",
+            "nalog.ru:80", "gosuslugi.ru:443", "cbr.ru:80",
+        ]
+        self.wl_labels: dict[str, tk.Label] = {}
+        details = ttk.Frame(self.tab_whitelist)
+        details.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        wf = ttk.LabelFrame(details, text=t("Хосты"), padding=8)
+        wf.pack(fill=tk.BOTH, expand=True)
+        for host in whitelist_hosts:
+            lbl = tk.Label(wf,
+                           text=f"{host} — ⏳ {t('не проверено')}",
+                           font=("Consolas", 10), fg='gray', anchor='w')
+            lbl.pack(fill=tk.X, padx=4, pady=2)
+            self.wl_labels[host] = lbl
+
+    def _start_whitelist_check(self) -> None:
+        self.wl_button.config(state='disabled')
+        self.wl_progress.start(10)
+        self.wl_title.config(text=t("Проверка…"), fg='orange')
+        self.wl_detail.config(text=t("Подождите 1–3 секунды."), fg='gray')
+        for lbl in self.wl_labels.values():
+            lbl.config(text=lbl.cget('text').split(' — ')[0] + " — ⏳",
+                       fg='gray')
+        threading.Thread(target=self._whitelist_task, daemon=True).start()
+
+    def _whitelist_task(self) -> None:
+        import socket as _socket
+        results: list[tuple[str, bool, str]] = []
+        for hostport in self.wl_labels:
+            host, port_str = hostport.split(':')
+            port = int(port_str)
+            try:
+                s = _socket.socket()
+                s.settimeout(3)
+                s.connect((host, port))
+                s.close()
+                results.append((hostport, True, "доступен"))
+            except Exception as e:
+                results.append((hostport, False, str(e)))
+        self._root.after(0, lambda: self._render_whitelist_results(results))
+
+    def _render_whitelist_results(
+            self, results: list[tuple[str, bool, str]]) -> None:
+        self.wl_progress.stop()
+        self.wl_button.config(state='normal')
+        ok_count = sum(1 for _, ok, _ in results if ok)
+        for hostport, ok, detail in results:
+            lbl = self.wl_labels[hostport]
+            sym, col = ("✅", '#00b894') if ok else ("❌", '#d63031')
+            lbl.config(text=f"{hostport} — {sym} {detail}", fg=col)
+        total = len(results)
+        color = '#00b894' if ok_count == total else '#d63031'
+        self.wl_title.config(
+            text=t("Доступно {ok}/{total}").format(ok=ok_count, total=total),
+            fg=color)
+        self.wl_detail.config(
+            text=t("OK" if ok_count == total else "Часть хостов недоступна"),
+            fg='#444444')
+
+    # =====================================================
+    # helpers
+    # =====================================================
+
+    def toggle_on_top(self) -> None:
+        self._root.attributes('-topmost', self.ontop_var.get())
+
+    def reset_peaks(self) -> None:
+        self._stat.reset_peaks()
 
     def _apply_theme(self) -> None:
         if self._dark_mode:
@@ -862,22 +1154,16 @@ class Application:
         self._style.configure('TLabelframe.Label', background=bg, foreground=fg)
         self._style.configure('Treeview', background=bg, foreground=fg, fieldbackground=bg)
         self._style.map('Treeview', background=[('selected', sel)])
-        if self._speed_graph:
-            self._speed_graph.set_bg_color("#1e1e2e")
-            self._speed_graph.set_text_color("#cdd6f4")
-            self._speed_graph.set_grid_color("#313244")
+        if hasattr(self, 'signal_graph') and self.signal_graph:
+            self.signal_graph.configure(bg=bg)
+            self.signal_graph.configure(highlightbackground=sel)
 
     def _toggle_dark(self) -> None:
-        self._dark_mode = self._dark_var.get()
+        self._dark_mode = not self._dark_mode
         self._apply_theme()
 
-    def _toggle_ontop(self) -> None:
-        self._always_on_top = self._ontop_var.get()
-        self._root.attributes('-topmost', self._always_on_top)
-
     def _switch_lang(self) -> None:
-        set_language(self._lang_var.get())
-        mb.showinfo("Info", "Restart required for language change")
+        pass  # заменено на _on_language_change
 
     def _open_alerts(self) -> None:
         w = AlertsWindow(self._root)
@@ -898,47 +1184,89 @@ class Application:
         self._cell_scan_window.grab_set()
 
     def _open_whitelist(self) -> None:
-        w = WhitelistWindow(self._root)
-        self._root.wait_window(w)
+        self.notebook.select(self.tab_whitelist)
 
-    def _toggle_connect(self) -> None:
+    def _apply_bands(self) -> None:
+        if not self._api.is_connected:
+            mb.showwarning(t("Band Lock"), t("Сначала подключитесь к роутеру"))
+            return
+        selected = [b for b, v in self.band_checkboxes.items() if v.get()]
+        if not selected:
+            mb.showwarning(t("Band Lock"), t("Выберите хотя бы один band"))
+            return
+        mask = 0
+        for b in selected:
+            bmask = _STANDARD_TO_FIBOCOM.get(b, 0)
+            if bmask:
+                mask |= bmask
+        iface = self._entry_vars['iface'].get()
+        threading.Thread(target=self._do_apply_bands,
+                         args=(iface, mask), daemon=True).start()
+
+    def _do_apply_bands(self, iface: str, mask: int) -> None:
+        try:
+            with _AT_LOCK:
+                self._do_at(f"at+xact={mask}")
+            self._root.after(0, lambda: mb.showinfo(
+                t("Band Lock"),
+                t("Команда отправлена. Будет применено после перезагрузки модуля.")))
+        except Exception as e:
+            self._root.after(0, lambda: mb.showerror("Error", str(e)))
+
+    def _reset_bands(self) -> None:
+        if not self._api.is_connected:
+            return
+        for var in self.band_checkboxes.values():
+            var.set(False)
+        iface = self._entry_vars['iface'].get()
+        threading.Thread(target=self._do_apply_bands,
+                         args=(iface, 0xffffffff), daemon=True).start()
+
+    # =====================================================
+    # CONNECTION
+    # =====================================================
+
+    def start_connect(self) -> None:
         if self._api.is_connected:
             self._stop_monitor()
             self._api.disconnect()
-            self._connect_btn.configure(text=t("🚀 Подключиться"))
-            self._conn_status.configure(text=t("Отключено"), foreground="gray")
+            self._connect_btn.config(text=t("🚀 Подключиться"))
+            self.status_label.config(text=t("Отключено"), foreground='red')
             self._destroy_tray()
-        else:
-            self._start_connect()
-
-    def _start_connect(self) -> None:
-        host = self._entry_vars['host'].get()
-        port_str = self._entry_vars['port'].get()
+            return
+        ip = self._entry_vars['host'].get().strip()
+        port_str = self._entry_vars['port'].get().strip()
         pwd = self._entry_vars['password'].get()
-        interval_str = self._entry_vars['interval'].get()
         iface = self._entry_vars['iface'].get()
         try:
             port = int(port_str)
-            interval = float(interval_str)
         except ValueError:
-            mb.showerror("Error", "Invalid port/interval")
+            mb.showerror("Error", t("Неверный порт"))
             return
-        self._api.host = host
+        try:
+            interval = float(self.update_interval.get())
+            self._monitor_interval = interval
+        except ValueError:
+            self._monitor_interval = MONITOR_INTERVAL
+        self._cached_iface = iface
+        self._cached_ip = ip
+        self._cached_pw = pwd
+        self._cached_port = port
+        self.auto_reconnect = self.reconnect_var.get()
+        self._api.host = ip
         self._api.port = port
         self._api.password = pwd
-        self._monitor_interval = interval
-        self._conn_status.configure(text=t("Подключение к роутеру..."), foreground="orange")
-        self._connect_btn.configure(state='disabled')
-        threading.Thread(target=self._do_connect, args=(iface,), daemon=True).start()
+        self._connect_btn.config(state='disabled')
+        self.status_label.config(text=t("Подключение..."), foreground='orange')
+        threading.Thread(target=self._connect_thread, daemon=True).start()
 
-    def _do_connect(self, iface: str) -> None:
+    def _connect_thread(self) -> None:
         try:
             self._api.connect()
-            self._iface_id = self._resolve_interface(iface)
+            self._iface_id = self._resolve_interface(self._cached_iface)
             self._root.after(0, self._on_connected)
         except Exception as e:
-            err_msg = str(e)
-            self._root.after(0, lambda em=err_msg: self._on_connect_error(em))
+            self._root.after(0, lambda err=str(e): self._on_connect_error(err))
 
     def _resolve_interface(self, name: str) -> str:
         try:
@@ -951,19 +1279,36 @@ class Application:
             return name
 
     def _on_connected(self) -> None:
-        self._connect_btn.configure(state='normal', text=t("⏹ Отключиться"))
-        self._conn_status.configure(text=t("Подключено"), foreground="green")
+        self._connect_btn.config(state='normal', text=t("⏹ Отключиться"))
+        self.status_label.config(text=t("Подключено"), foreground='green')
+        self.notebook.select(self.tab_monitor)
         self._monitor_running = True
-        self._monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
+        self._monitor_thread = threading.Thread(
+            target=self._monitor_loop, daemon=True)
         self._monitor_thread.start()
         self._create_tray()
-        self._after_id = self._safe_after(int(self._monitor_interval * 1000), self._update_ui)
+        self._after_id = self._safe_after(
+            int(self._monitor_interval * 1000), self._update_ui)
         self._check_updates()
+        # Заполняем SIM/Device
+        self._update_sim_labels()
+
+    def _update_sim_labels(self) -> None:
+        info = self._lte_info
+        self.sim_labels['iccid'].config(
+            text=info.get('iccid', t('Н/Д')))
+        self.sim_labels['model'].config(
+            text=info.get('model', t('Н/Д')))
+        self.sim_labels['firmware'].config(
+            text=info.get('firmware', t('Н/Д')))
 
     def _on_connect_error(self, err: str) -> None:
-        self._connect_btn.configure(state='normal')
-        self._conn_status.configure(text=t("Ошибка"), foreground="red")
-        mb.showerror(t("Ошибка подключения"), t("Связь с роутером не удалась:\n\n{err}").format(err=err))
+        self._connect_btn.config(state='normal', text=t("🚀 Подключиться"))
+        self.status_label.config(text=t("Ошибка"), foreground='red')
+        snippet = err if len(err) < 200 else err[:200] + "..."
+        mb.showerror(
+            t("Ошибка подключения"),
+            t("Связь с роутером не удалась:\n\n{err}").format(err=snippet))
 
     def _safe_after(self, ms: int, cb: Callable[[], None]) -> str | None:
         try:
@@ -971,25 +1316,62 @@ class Application:
         except (RuntimeError, tk.TclError):
             return None
 
+    # =====================================================
+    # MONITOR LOOP
+    # =====================================================
+
     def _monitor_loop(self) -> None:
+        tick = 0
         while self._monitor_running:
             try:
                 self._collect_data()
+                self._reconnect_delay = 5
             except ConnectionError:
-                self._monitor_running = False
-                self._root.after(0, self._on_disconnect)
-                break
+                self._root.after(0, lambda: self.status_label.config(
+                    text=t("Таймаут API..."), foreground='orange'))
+                if self.auto_reconnect and self._monitor_running:
+                    self._try_reconnect()
+                else:
+                    self._monitor_running = False
+                    self._root.after(0, self._on_disconnect_ui)
+                    break
             except Exception:
                 logger.exception("Monitor loop error")
-            time.sleep(self._monitor_interval)
-            self._tick_counter += 1
-            if self._tick_counter % 30 == 0:
-                try:
-                    self._api.cmd('/system/identity/print')
-                except ConnectionError:
-                    self._monitor_running = False
-                    self._root.after(0, self._on_disconnect)
-                    break
+            tick += 1
+            if self._monitor_running:
+                import threading as _t
+                _t.Event().wait(self._monitor_interval)
+
+    def _try_reconnect(self) -> None:
+        delay = 5
+        for d in range(delay, 0, -1):
+            if not self._monitor_running:
+                return
+            self._root.after(0, lambda d=d: self.status_label.config(
+                text=t("Переподключение через {d}с...").format(d=d),
+                foreground='orange'))
+            import threading as _t
+            _t.Event().wait(1)
+        if not self._monitor_running:
+            return
+        try:
+            self._api.host = self._cached_ip
+            self._api.port = self._cached_port
+            self._api.password = self._cached_pw
+            self._api.connect()
+            self._iface_id = self._resolve_interface(self._cached_iface)
+            self._root.after(0, lambda: self.status_label.config(
+                text=t("Подключено"), foreground='green'))
+        except Exception:
+            self._root.after(0, lambda: self.status_label.config(
+                text=t("Ошибка переподключения"), foreground='red'))
+            if self.auto_reconnect and self._monitor_running:
+                self._try_reconnect()
+
+    def _on_disconnect_ui(self) -> None:
+        self.status_label.config(text=t("Отключено"), foreground='red')
+        self._connect_btn.config(text=t("🚀 Подключиться"))
+        self._destroy_tray()
 
     def _collect_data(self) -> None:
         if not self._api.is_connected:
@@ -1040,8 +1422,8 @@ class Application:
 
     def _do_at(self, cmd: str) -> str:
         try:
-            iface = self._entry_vars['iface'].get()
-            r = self._api.cmd('/interface/lte/at-chat', f'=.id={self._iface_id}',
+            r = self._api.cmd('/interface/lte/at-chat',
+                            f'=.id={self._iface_id}',
                             f'=input={cmd}', '=wait=yes')
             return r.get('recv', '')
         except Exception:
@@ -1049,31 +1431,135 @@ class Application:
 
     def _collect_traffic(self) -> None:
         try:
-            r = self._api.raw_cmd('/interface/monitor-traffic', f'=.id={self._iface_id}', '=once')
+            r = self._api.raw_cmd('/interface/monitor-traffic',
+                                f'=.id={self._iface_id}', '=once')
             if r:
                 rx = int(r[0].get('rx-bits-per-second', 0))
                 tx = int(r[0].get('tx-bits-per-second', 0))
-                now = time.time()
                 rx_mbps = rx / 1_000_000
                 tx_mbps = tx / 1_000_000
                 self._stat.add(rx_mbps, tx_mbps)
         except Exception:
             pass
 
+    # =====================================================
+    # UI REFRESH
+    # =====================================================
+
     def _update_ui(self) -> None:
         if not self._monitor_running:
             return
         try:
-            self._update_system_info()
-            self._update_signal_labels()
-            self._update_speed_graph()
+            self._update_health()
+            self._update_digits()
+            self._update_graph()
+            self._update_tower_info()
             self._update_tower_history()
+            self._update_status_labels()
             self._check_alert()
         except Exception:
             pass
-        self._after_id = self._safe_after(int(self._monitor_interval * 1000), self._update_ui)
+        self._after_id = self._safe_after(
+            int(self._monitor_interval * 1000), self._update_ui)
 
-    def _update_system_info(self) -> None:
+    def _update_health(self) -> None:
+        data = self._signal_data
+        if not data:
+            return
+        rsrp = self._extract_param("rsrp")
+        if rsrp != '-':
+            try:
+                r = float(rsrp)
+                pct = max(0, min(100, (r + 120) * 100 / 50))
+                self.health_progress.config(value=pct)
+                if pct > 70:
+                    txt, col = t("Отличный сигнал"), '#00b894'
+                elif pct > 40:
+                    txt, col = t("Хороший сигнал"), '#fdcb6e'
+                else:
+                    txt, col = t("Слабый сигнал"), '#d63031'
+                self.health_text_lbl.config(text=txt, fg=col)
+            except (ValueError, TypeError):
+                pass
+
+    def _update_digits(self) -> None:
+        params = {'rsrp': 'RSRP', 'sinr': 'SINR', 'rsrq': 'RSRQ', 'rssi': 'RSSI'}
+        data = self._signal_data
+        if not data:
+            return
+        for key, name in params.items():
+            lbls = self.lbl_vars.get(key)
+            if not lbls:
+                continue
+            val = self._extract_param(key) if key != 'rssi' else data.get('rssi', '-')
+            suffix = ''
+            if key == 'rsrp':
+                suffix = ' dBm'
+            elif key in ('sinr', 'rsrq'):
+                suffix = ' dB'
+            elif key == 'rssi':
+                suffix = ' dBm'
+            if val != '-':
+                try:
+                    v = float(val)
+                    col = '#00b894' if (key in ('rsrp', 'rssi') and v > -90) or (key in ('sinr', 'rsrq') and v > 10) else '#d63031'
+                    lbls['val'].config(text=f"{v:.0f}{suffix}", fg=col)
+                    lbls['status'].config(text=t("Норма") if col == '#00b894' else t("Плохо"), fg=col)
+                except (ValueError, TypeError):
+                    lbls['val'].config(text="-", fg='gray')
+                    lbls['status'].config(text=t("Нет данных"), fg='gray')
+            else:
+                lbls['val'].config(text="-", fg='gray')
+                lbls['status'].config(text=t("Нет данных"), fg='gray')
+
+    def _update_graph(self) -> None:
+        if not hasattr(self, '_speed_graph') or not self._speed_graph:
+            return
+        rx, tx, ts = self._stat.last_n(60)
+        if rx:
+            self.signal_graph.values = [v * 10 for v in rx]
+            self.signal_graph._redraw()
+        prx = self._stat.peak_rx
+        ptx = self._stat.peak_tx
+        self._peak_rx_lbl.config(
+            text=f"{t('Download')} ↓: {prx:.2f} Mbps")
+        self._peak_tx_lbl.config(
+            text=f"{t('Upload')} ↑: {ptx:.2f} Mbps")
+
+    def _update_tower_info(self) -> None:
+        data = self._signal_data
+        if not data:
+            return
+        rsrp = self._extract_param("rsrp")
+        sinr = self._extract_param("sinr")
+        band = self._parse_active_band(
+            data.get('raw_xlec', ''), data.get('raw_xact', ''))
+        operator = parse_at_cops(data.get('raw_cops', ''))
+        raw_cereg = data.get('raw_cereg', '')
+        cell_id = '-'
+        if raw_cereg:
+            m = re.search(r'CEREG:\s*\d+,\d+,"?([^",]+)', raw_cereg)
+            if m:
+                cid = m.group(1)
+                try:
+                    cell_id = str(int(cid, 16))
+                except ValueError:
+                    cell_id = cid
+        rat = '-'
+        if raw_cereg:
+            m = re.search(r'CEREG:\s*\d+,\d+,[^,]*,(\d+)', raw_cereg)
+            if m:
+                rat_code = m.group(1)
+                rat_map = {'7': 'LTE', '9': 'LTE-A', '2': 'UTRAN', '4': 'HSDPA'}
+                rat = rat_map.get(rat_code, f'RAT:{rat_code}')
+        aggr = self._parse_at_aggregation(data.get('raw_xlec', ''))
+        self.tower_labels['plmn'].config(text=operator if operator else '-')
+        self.tower_labels['band'].config(text=band)
+        self.tower_labels['cell_id'].config(text=cell_id)
+        self.tower_labels['aggr'].config(text=aggr)
+        self.tower_labels['rat'].config(text=rat)
+
+    def _update_status_labels(self) -> None:
         info = self._sys_info
         uptime = info.get('uptime', '-')
         cpu = info.get('cpu-load', '-')
@@ -1085,10 +1571,76 @@ class Application:
         except ValueError:
             free_mb = 0
             total_mb = 0
-        self._signal_labels['uptime'].configure(text=f"{uptime}")
-        self._statusbar.configure(
-            text=f"CPU: {cpu}% | {t('Свободная память')}: {free_mb:.0f}/{total_mb:.0f} MB"
-        )
+        if hasattr(self, 'stat_labels') and self.stat_labels:
+            self.stat_labels['uptime'].config(text=uptime)
+            self.stat_labels['cpu'].config(text=f"{cpu}%")
+            self.stat_labels['memory'].config(
+                text=f"{free_mb:.0f}/{total_mb:.0f} MB")
+            prx = self._stat.peak_rx
+            ptx = self._stat.peak_tx
+            self.stat_labels['dl_rate'].config(text=f"{prx:.2f} Mbps")
+            self.stat_labels['ul_rate'].config(text=f"{ptx:.2f} Mbps")
+            data = self._signal_data
+            if data:
+                op = parse_at_cops(data.get('raw_cops', ''))
+                self.stat_labels['operator'].config(text=op if op else '-')
+            raw_cereg = data.get('raw_cereg', '') if data else ''
+            cell_id = '-'
+            if raw_cereg:
+                m = re.search(r'CEREG:\s*\d+,\d+,"?([^",]+)', raw_cereg)
+                if m:
+                    cid = m.group(1)
+                    try:
+                        cell_id = str(int(cid, 16))
+                    except ValueError:
+                        cell_id = cid
+            self.stat_labels['cell_id'].config(text=cell_id)
+
+    def _update_tower_history(self) -> None:
+        data = self._signal_data
+        if not data:
+            return
+        rsrp = self._extract_param("rsrp")
+        sinr = self._extract_param("sinr")
+        band = self._parse_active_band(
+            data.get('raw_xlec', ''), data.get('raw_xact', ''))
+        operator = parse_at_cops(data.get('raw_cops', ''))
+        raw_cereg = data.get('raw_cereg', '')
+        cell_id = '-'
+        if raw_cereg:
+            m = re.search(r'CEREG:\s*\d+,\d+,"?([^",]+)', raw_cereg)
+            if m:
+                cid = m.group(1)
+                try:
+                    cell_id = str(int(cid, 16))
+                except ValueError:
+                    cell_id = cid
+        now_str = datetime.now().strftime('%H:%M:%S')
+        if cell_id != self._prev_cell_id and cell_id != '-':
+            entry = {
+                'time': now_str,
+                'cell_id': cell_id,
+                'rsrp': str(rsrp),
+                'sinr': str(sinr),
+                'band': band,
+                'operator': operator,
+            }
+            self._tower_history.add(entry)
+            self._prev_cell_id = cell_id
+            self._refresh_tower_tree()
+
+    def _refresh_tower_tree(self) -> None:
+        for item in self._tower_tree.get_children():
+            self._tower_tree.delete(item)
+        for entry in reversed(self._tower_history.entries):
+            self._tower_tree.insert('', 'end', values=(
+                entry.get('time', ''),
+                entry.get('cell_id', ''),
+                entry.get('rsrp', ''),
+                entry.get('sinr', ''),
+                entry.get('band', ''),
+                entry.get('operator', ''),
+            ))
 
     def _parse_at_aggregation(self, raw_xlec: str) -> str:
         if not raw_xlec:
@@ -1129,50 +1681,7 @@ class Application:
         return band_str
 
     def _update_signal_labels(self) -> None:
-        data = self._signal_data
-        if not data:
-            return
-        rsrp = self._extract_param("rsrp")
-        sinr = self._extract_param("sinr")
-        rsrq = self._extract_param("rsrq")
-        rssi_val = data.get('rssi', '-')
-        raw_cops = data.get('raw_cops', '')
-        raw_xlec = data.get('raw_xlec', '')
-        raw_xact = data.get('raw_xact', '')
-        raw_cereg = data.get('raw_cereg', '')
-
-        operator = parse_at_cops(raw_cops)
-        self._signal_labels['operator'].configure(text=operator if operator else '-')
-        self._signal_labels['rsrp'].configure(text=f"{rsrp} dBm" if rsrp != '-' else '-')
-        self._signal_labels['sinr'].configure(text=f"{sinr} dB" if sinr != '-' else '-')
-        self._signal_labels['rsrq'].configure(text=f"{rsrq} dB" if rsrq != '-' else '-')
-        self._signal_labels['rssi'].configure(text=f"{rssi_val} dBm" if rssi_val != '-' else '-')
-
-        band = self._parse_active_band(raw_xlec, raw_xact)
-        self._signal_labels['band'].configure(text=band)
-
-        aggr = self._parse_at_aggregation(raw_xlec)
-        self._signal_labels['aggr'].configure(text=aggr)
-
-        cell_id = '-'
-        if raw_cereg:
-            m = re.search(r'CEREG:\s*\d+,\d+,"?([^",]+)', raw_cereg)
-            if m:
-                cid = m.group(1)
-                try:
-                    cell_id = str(int(cid, 16))
-                except ValueError:
-                    cell_id = cid
-        self._signal_labels['cell_id'].configure(text=cell_id)
-
-        rat = '-'
-        if raw_cereg:
-            m = re.search(r'CEREG:\s*\d+,\d+,[^,]*,(\d+)', raw_cereg)
-            if m:
-                rat_code = m.group(1)
-                rat_map = {'7': 'LTE', '9': 'LTE-A', '2': 'UTRAN', '4': 'HSDPA'}
-                rat = rat_map.get(rat_code, f'RAT:{rat_code}')
-        self._signal_labels['rat'].configure(text=rat)
+        pass  # заменено на _update_digits
 
     def _extract_param(self, param: str) -> Any:
         data = self._signal_data
@@ -1189,64 +1698,6 @@ class Application:
             csq_data = parse_at_csq(raw_csq)
             return csq_data.get('rssi', '-')
         return '-'
-
-    def _update_speed_graph(self) -> None:
-        rx, tx, ts = self._stat.last_n(60)
-        if self._speed_graph:
-            if rx:
-                self._speed_graph.update_data('download', rx)
-            if tx:
-                self._speed_graph.update_data('upload', tx)
-            self._speed_graph.refresh()
-        prx = self._stat.peak_rx
-        ptx = self._stat.peak_tx
-        self._peak_rx_lbl.configure(text=f"{t('Download')} ↓: {prx:.2f} Mbps")
-        self._peak_tx_lbl.configure(text=f"{t('Upload')} ↑: {ptx:.2f} Mbps")
-
-    def _update_tower_history(self) -> None:
-        data = self._signal_data
-        if not data:
-            return
-        rsrp = self._extract_param("rsrp")
-        sinr = self._extract_param("sinr")
-        band = self._parse_active_band(data.get('raw_xlec', ''), data.get('raw_xact', ''))
-        operator = parse_at_cops(data.get('raw_cops', ''))
-        raw_cereg = data.get('raw_cereg', '')
-        cell_id = '-'
-        if raw_cereg:
-            m = re.search(r'CEREG:\s*\d+,\d+,"?([^",]+)', raw_cereg)
-            if m:
-                cid = m.group(1)
-                try:
-                    cell_id = str(int(cid, 16))
-                except ValueError:
-                    cell_id = cid
-        now_str = datetime.now().strftime('%H:%M:%S')
-        if cell_id != self._prev_cell_id and cell_id != '-':
-            entry = {
-                'time': now_str,
-                'cell_id': cell_id,
-                'rsrp': str(rsrp),
-                'sinr': str(sinr),
-                'band': band,
-                'operator': operator,
-            }
-            self._tower_history.add(entry)
-            self._prev_cell_id = cell_id
-            self._refresh_tower_tree()
-
-    def _refresh_tower_tree(self) -> None:
-        for item in self._tower_tree.get_children():
-            self._tower_tree.delete(item)
-        for entry in reversed(self._tower_history.entries):
-            self._tower_tree.insert('', 'end', values=(
-                entry.get('time', ''),
-                entry.get('cell_id', ''),
-                entry.get('rsrp', ''),
-                entry.get('sinr', ''),
-                entry.get('band', ''),
-                entry.get('operator', ''),
-            ))
 
     def _check_alert(self) -> None:
         if not self._alert_enabled:
@@ -1291,35 +1742,13 @@ class Application:
             try:
                 self._api.cmd('/system/reboot')
                 mb.showinfo(t("Перезагрузить роутер"),
-                           t("Команда перезагрузки отправлена.\nРоутер перезагрузится через несколько секунд."))
+                           t("Команда отправлена.\nРоутер перезагрузится."))
                 self._monitor_running = False
                 self._api.disconnect()
-                self._connect_btn.configure(text=t("🚀 Подключиться"))
-                self._conn_status.configure(text=t("Отключено"), foreground="gray")
+                self._connect_btn.config(text=t("🚀 Подключиться"))
+                self.status_label.config(text=t("Отключено"), foreground='red')
             except Exception as e:
                 mb.showerror("Error", str(e))
-
-    def _on_disconnect(self) -> None:
-        self._conn_status.configure(text=t("Таймаут API..."), foreground="red")
-        self._connect_btn.configure(text=t("🚀 Подключиться"))
-        self._destroy_tray()
-        reconnect_delay = 5
-        for d in range(reconnect_delay, 0, -1):
-            self._conn_status.configure(text=t("Переподключение через {d:.0f}с...").format(d=d))
-            time.sleep(1)
-        if not self._monitor_running:
-            return
-        try:
-            self._api.connect()
-            self._monitor_running = True
-            self._monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
-            self._monitor_thread.start()
-            self._create_tray()
-            self._connect_btn.configure(text=t("⏹ Отключиться"))
-            self._conn_status.configure(text=t("Подключено"), foreground="green")
-            self._after_id = self._safe_after(int(self._monitor_interval * 1000), self._update_ui)
-        except Exception:
-            self._on_disconnect()
 
     def _stop_monitor(self) -> None:
         self._monitor_running = False
@@ -1377,14 +1806,87 @@ class Application:
                     data = json.loads(resp.read().decode())
                     latest = data.get('tag_name', '')
                     if latest and latest.lstrip('v') > VERSION:
-                        self._root.after(0, lambda: self._statusbar.configure(
-                            text=f"Update {latest} available: {GITHUB_REPO}/releases"))
+                        self._root.after(0, lambda: self.status_label.config(
+                            text=f"Update {latest} available"))
             except Exception:
                 pass
         threading.Thread(target=check, daemon=True).start()
 
     def run(self) -> None:
         self._root.mainloop()
+
+
+class CanvasGraph(tk.Canvas):
+    PADDING = (45, 12, 18, 22)
+
+    def __init__(self, parent: tk.Misc, history: int = 100, **kw):
+        super().__init__(parent, bg='white', highlightthickness=1,
+                         highlightbackground='#cccccc', **kw)
+        self.history = history
+        self.values: list[float] = []
+        self.y_min = -120.0
+        self.y_max = -50.0
+        self.unit = "dBm"
+        self.title = "RSRP"
+        self.bind("<Configure>", lambda e: self._redraw())
+
+    def configure_axes(self, y_min: float, y_max: float,
+                       unit: str, title: str) -> None:
+        self.y_min, self.y_max = float(y_min), float(y_max)
+        self.unit, self.title = unit, title
+        self.values.clear()
+        self._redraw()
+
+    def push(self, val: float) -> None:
+        self.values.append(float(val))
+        if len(self.values) > self.history:
+            self.values.pop(0)
+        self._redraw()
+
+    def clear(self) -> None:
+        self.values.clear()
+        self._redraw()
+
+    def _redraw(self) -> None:
+        self.delete("all")
+        w, h = self.winfo_width(), self.winfo_height()
+        if w < 80 or h < 50:
+            return
+        pl, pr, pt, pb = self.PADDING
+        plot_w, plot_h = w - pl - pr, h - pt - pb
+        if plot_w <= 0 or plot_h <= 0:
+            return
+        self.create_text(pl, 3, anchor='nw',
+                         text=f"{self.title} ({self.unit})",
+                         font=("Segoe UI", 9, "bold"), fill='#333')
+        for i in range(5):
+            y = pt + plot_h * i / 4
+            v = self.y_max - (self.y_max - self.y_min) * i / 4
+            self.create_line(pl, y, w - pr, y, fill='#ececec')
+            self.create_text(pl - 3, y, anchor='e', text=f"{v:g}",
+                             font=("", 8), fill='#666')
+        self.create_line(pl, h - pb, w - pr, h - pb, fill='#888')
+        self.create_text((pl + w - pr) / 2, h - 3, anchor='s',
+                         text=t("последние {n} точек").format(n=self.history),
+                         font=("", 8), fill='#888')
+        if not self.values:
+            return
+        span = max(self.history - 1, 1)
+        rng = max(self.y_max - self.y_min, 1e-9)
+        pts: list[float] = []
+        for i, v in enumerate(self.values):
+            x = pl + plot_w * i / span
+            v_cl = max(self.y_min, min(self.y_max, v))
+            y = (h - pb) - plot_h * (v_cl - self.y_min) / rng
+            pts.extend([x, y])
+        if len(pts) >= 4:
+            self.create_line(*pts, fill='#0078D7', width=2)
+        lx, ly = pts[-2], pts[-1]
+        self.create_oval(lx - 3, ly - 3, lx + 3, ly + 3,
+                         fill='#0078D7', outline='')
+        self.create_text(w - pr - 5, pt + 4, anchor='ne',
+                         text=f"{self.values[-1]:g} {self.unit}",
+                         font=("Segoe UI", 9, "bold"), fill='#0078D7')
 
 
 def setup_logging() -> None:
